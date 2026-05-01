@@ -57,7 +57,40 @@ io.on("connection", (socket) => {
             if (!state) return;
             autoPlayTurn(state);
             if (state.status === 'finished') {
-                // *** INSERT YOUR EXISTING MongoDB SAVE LOGIC HERE ***
+                try {
+                  // coins ki calc.
+                  const numPlayers = state.players.length;
+                  const coinAwards = (rank: number) => {
+                    if (numPlayers === 4) return rank === 1 ? 100 : rank === 2 ? 50 : rank === 3 ? 25 : 0;
+                    if (numPlayers === 3) return rank === 1 ? 50 : rank === 2 ? 25 : 0;
+                    return rank === 1 ? 25 : 0; // 2 players
+                  };
+                  const dbPlayers = state.players.map(p => ({
+                    user_id: p.userId,
+                    username: p.username,
+                    color: p.color,
+                    rank: p.rank,
+                    coins_earned: coinAwards(p.rank as number)
+                  }));
+                  const newGame = new Game({
+                    total_players: numPlayers,
+                    players: dbPlayers,
+                    status: 'finished',
+                    started_at: new Date(),
+                    finished_at: new Date()
+                  });
+                  await newGame.save();
+
+                  // update user balances & stats.
+                  for (const p of dbPlayers) {
+                    await User.findByIdAndUpdate(p.user_id, {
+                      $inc: { coins: p.coins_earned, total_played: 1 }
+                    });
+                  }
+                } catch (error) {
+                  console.error("Failed to save game to DB from timer:", error);
+                }
+
                 io.to(gameId).emit("game:over", state);
                 activeGames.delete(gameId);
                 turnTimers.delete(gameId);
@@ -110,9 +143,10 @@ io.on("connection", (socket) => {
   socket.on("game:join_room", ({ gameId, userId }) => {
       socket.join(gameId);
       userSockets.set(socket.id, { userId, gameId });
-      const gameState = activeGames.get(gameId);
+      const gameState = activeGames.get(gameId);      
       if (gameState) {
           const player = gameState.players.find(p => p.userId === userId);
+          
           if (player && player.isAI) {
               player.isAI = false;
               gameState.logs.unshift(`${player.username} reconnected!`);
@@ -123,9 +157,11 @@ io.on("connection", (socket) => {
               }
           } else if (gameState.status === 'playing' && !turnTimers.has(gameId)) {
               startTurnTimer(gameId);
+          } else {
+              socket.emit("game:update", gameState);
           }
       }
-    });
+  });
   socket.on("game:roll", ({ gameId, userId }) => {
     const gameState = activeGames.get(gameId);
     if (!gameState) return;
@@ -178,6 +214,7 @@ io.on("connection", (socket) => {
 
           io.to(gameId).emit("game:over", updatedState);
           activeGames.delete(gameId);
+          turnTimers.delete(gameId);
           
         } catch (error) {
           console.error("Failed to save game to DB:", error);
