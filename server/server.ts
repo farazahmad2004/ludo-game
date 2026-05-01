@@ -2,6 +2,8 @@ import { config } from "dotenv";
 config({
   path: "./config.env",
 });
+import { Game } from './models/Game.ts';
+import { User } from './models/User.ts';
 import { Socket, Server } from "socket.io";
 import http from "http";
 import { app } from "./app.ts";
@@ -93,16 +95,57 @@ io.on("connection", (socket) => {
       io.to(gameId).emit("game:update", updatedState);
     }
   });
-  socket.on("game:move", ({ gameId, userId, tokenId }) => {
+  socket.on("game:move", async ({ gameId, userId, tokenId }) => {
     const gameState = activeGames.get(gameId);
     if (!gameState) return;
-
-    const updatedState = executeMove(gameState, userId, tokenId);
-    
+    const updatedState = executeMove(gameState, userId, tokenId);    
     if (updatedState) {
       activeGames.set(gameId, updatedState);
       io.to(gameId).emit("game:update", updatedState);
+      if (updatedState.status === 'finished') {
+        try {
+          // coins ki calc.
+          const numPlayers = updatedState.players.length;
+          const coinAwards = (rank: number) => {
+            if (numPlayers === 4) return rank === 1 ? 100 : rank === 2 ? 50 : rank === 3 ? 25 : 0;
+            if (numPlayers === 3) return rank === 1 ? 50 : rank === 2 ? 25 : 0;
+            return rank === 1 ? 25 : 0; // 2 players
+          };
+          const dbPlayers = updatedState.players.map(p => ({
+            user_id: p.userId,
+            username: p.username,
+            color: p.color,
+            rank: p.rank,
+            coins_earned: coinAwards(p.rank as number)
+          }));
+          const newGame = new Game({
+            total_players: numPlayers,
+            players: dbPlayers,
+            status: 'finished',
+            started_at: new Date(),
+            finished_at: new Date()
+          });
+          await newGame.save();
+
+          // update user balances & stats.
+          for (const p of dbPlayers) {
+            await User.findByIdAndUpdate(p.user_id, {
+              $inc: { coins: p.coins_earned, total_played: 1 }
+            });
+          }
+
+          io.to(gameId).emit("game:over", updatedState);
+          activeGames.delete(gameId);
+          
+        } catch (error) {
+          console.error("Failed to save game to DB:", error);
+        }
+      }
     }
+  });
+  socket.on("game:chat", ({ gameId, sender, text, color }) => {
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    io.to(gameId).emit("game:chat", { sender, text, time, color });
   });
   socket.on("disconnect", () => {
     console.log("USER DISCONNECTED:", socket.id);

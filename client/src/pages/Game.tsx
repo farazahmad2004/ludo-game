@@ -37,6 +37,9 @@ export default function Game() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [gameState, setGameState] = useState<GameState | null>(null);
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState<{sender: string, text: string, time: string, color: string}[]>([]);
+  const [isGameOver, setIsGameOver] = useState(false);
 
   useEffect(() => {
     if (!game_id) return;
@@ -47,9 +50,18 @@ export default function Game() {
     socket.on("game:update", (state: GameState) => {
       setGameState(state);
     });
+    socket.on("game:chat", (msgData) => {
+      setChatMessages((prev) => [...prev, msgData]);
+    });
+    socket.on("game:over", (finalState: GameState) => {
+      setGameState(finalState);
+      setIsGameOver(true);
+    });
 
     return () => {
       socket.off("game:update");
+      socket.off("game:chat");
+      socket.off("game:over");
     };
   }, [game_id]);
 
@@ -69,6 +81,16 @@ export default function Game() {
     if (isMyTurn && !gameState.canRoll && gameState.currentRoll !== null) {
       socket.emit("game:move", { gameId: game_id, userId: user?._id, tokenId });
     }
+  };
+  const handleSendMessage = () => {
+    if (!chatInput.trim() || !myPlayer) return;
+    socket.emit("game:chat", { 
+      gameId: game_id, 
+      sender: myPlayer.username, 
+      text: chatInput, 
+      color: myPlayer.color 
+    });
+    setChatInput("");
   };
 
   const renderSquare = (posId: number) => {
@@ -124,15 +146,36 @@ export default function Game() {
     });
   };
 
-  const renderFinished = (color: string) => {
+  const renderFinished = (color: string, positionStyles: React.CSSProperties) => {
     const finishedTokens = gameState.players
       .find(p => p.color === color)?.tokens
       .filter(t => t.state === 'finished') || [];
       
-    return finishedTokens.map(token => {
-      const colorClass = token.color === 'yellow' ? 'yel' : token.color;
-      return <div key={token.id} className={`token token--${colorClass}`} style={{ transform: 'scale(0.7)' }}>{token.id}</div>;
-    });
+    if (finishedTokens.length === 0) return null;
+
+    return (
+      <div style={{
+        position: 'absolute',
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '2px',
+        zIndex: 50,
+        ...positionStyles
+      }}>
+        {finishedTokens.map(token => {
+          const colorClass = token.color === 'yellow' ? 'yel' : token.color;
+          return (
+            <div 
+              key={token.id} 
+              className={`token token--${colorClass}`} 
+              style={{ width: '14px', height: '14px', minWidth: '14px', fontSize: '8px', lineHeight: '14px', margin: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.5)' }}
+            >
+              {token.id}
+            </div>
+          );
+        })}
+      </div>
+    );
   };
   const handleLeaveGame = () => {
     navigate("/home");
@@ -202,7 +245,6 @@ export default function Game() {
             </div>
           </aside>
 
-          {/* ══ BOARD AREA ══ */}
           <div className="board-area">
             <div className="ludo-board">
               <div className="board-row board-row--top">
@@ -211,6 +253,7 @@ export default function Game() {
                     {renderYard('red')}
                   </div>
                 </div>
+                
                 <div className="track-col track-col--top">
                   <div className="sq">{renderSquare(10)}</div>
                   <div className="sq">{renderSquare(11)}</div>
@@ -236,16 +279,18 @@ export default function Game() {
                   <div className="sq sq--home-blue">{renderSquare(205)}</div>
                   <div className="sq">{renderSquare(17)}</div>
                 </div>
+
                 <div className="home home--blue">
                   <div className="yard">
                     {renderYard('blue')}
                   </div>
                 </div>
               </div>
+
               <div className="board-row board-row--mid">
                 <div className="track-col track-col--left">
-                  <div className="sq sq--safe">{renderSquare(51)}</div>
-                  <div className="sq sq--start-red">{renderSquare(0)}</div>
+                  <div className="sq">{renderSquare(51)}</div>
+                  <div className="sq sq--safe sq--start-red">{renderSquare(0)}</div>
                   <div className="sq">{renderSquare(1)}</div>
                   <div className="sq">{renderSquare(2)}</div>
                   <div className="sq">{renderSquare(3)}</div>
@@ -265,13 +310,20 @@ export default function Game() {
                   <div className="sq">{renderSquare(45)}</div>
                   <div className="sq">{renderSquare(44)}</div>
                 </div>
-                <div className="centre">
-                  <div className="tri tri--top" style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', paddingBottom: '5px' }}>{renderFinished('blue')}</div>
-                  <div className="tri tri--right" style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', paddingLeft: '5px' }}>{renderFinished('yellow')}</div>
-                  <div className="tri tri--bot" style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', paddingTop: '5px' }}>{renderFinished('green')}</div>
-                  <div className="tri tri--left" style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', paddingRight: '5px' }}>{renderFinished('red')}</div>
+
+                <div className="centre" style={{ position: 'relative' }}>
+                  <div className="tri tri--top" />
+                  <div className="tri tri--right" />
+                  <div className="tri tri--bot" />
+                  <div className="tri tri--left" />
                   <span className="centre-star">★</span>
+                  
+                  {renderFinished('blue', { top: '8px', left: 0, width: '100%', justifyContent: 'center' })}
+                  {renderFinished('yellow', { right: '8px', top: 0, height: '100%', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' })}
+                  {renderFinished('green', { bottom: '8px', left: 0, width: '100%', justifyContent: 'center' })}
+                  {renderFinished('red', { left: '8px', top: 0, height: '100%', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' })}
                 </div>
+
                 <div className="track-col track-col--right">
                   <div className="sq">{renderSquare(18)}</div>
                   <div className="sq">{renderSquare(19)}</div>
@@ -291,16 +343,18 @@ export default function Game() {
                   <div className="sq">{renderSquare(29)}</div>
                   <div className="sq">{renderSquare(28)}</div>
                   <div className="sq">{renderSquare(27)}</div>
-                  <div className="sq sq--start-yellow">{renderSquare(26)}</div>
+                  <div className="sq sq--safe sq--start-yellow">{renderSquare(26)}</div>
                   <div className="sq">{renderSquare(25)}</div>
                 </div>
               </div>
+
               <div className="board-row board-row--bot">
                 <div className="home home--green">
                   <div className="yard">
                     {renderYard('green')}
                   </div>
                 </div>
+
                 <div className="track-col track-col--bot">
                   <div className="sq">{renderSquare(43)}</div>
                   <div className="sq sq--home-green">{renderSquare(405)}</div>
@@ -318,7 +372,7 @@ export default function Game() {
                   <div className="sq sq--home-green">{renderSquare(402)}</div>
                   <div className="sq sq--safe">{renderSquare(34)}</div>
                   
-                  <div className="sq sq--start-green">{renderSquare(39)}</div>
+                  <div className="sq sq--safe sq--start-green">{renderSquare(39)}</div>
                   <div className="sq sq--home-green">{renderSquare(401)}</div>
                   <div className="sq">{renderSquare(35)}</div>
                   
@@ -326,6 +380,7 @@ export default function Game() {
                   <div className="sq">{renderSquare(37)}</div>
                   <div className="sq">{renderSquare(36)}</div>
                 </div>
+
                 <div className="home home--yellow">
                   <div className="yard">
                     {renderYard('yellow')}
@@ -334,17 +389,32 @@ export default function Game() {
               </div>
             </div>
           </div>
-
           <aside>
             <div className="panel">
               <div className="panel-hd">Live Chat</div>
               <div className="chat-window">
-                <div className="chat-messages">
+                <div className="chat-messages" style={{ overflowY: 'auto', maxHeight: '200px' }}>
                   <div className="chat-msg sys"><div className="msg-bubble">Game started – Good luck everyone!</div></div>
+                  {chatMessages.map((msg, idx) => (
+                    <div key={idx} className={`chat-msg ${msg.sender === myPlayer?.username ? 'mine' : ''}`}>
+                      <div className={`msg-meta ${msg.sender === myPlayer?.username ? 'flex-end-justify' : ''}`}>
+                        {msg.sender !== myPlayer?.username && <span className={`msg-sender msg-sender-${msg.color}`}>{msg.sender}</span>}
+                        <span className="msg-time">{msg.time}</span>
+                        {msg.sender === myPlayer?.username && <span className={`msg-sender msg-sender-${msg.color}`}>You</span>}
+                      </div>
+                      <div className="msg-bubble">{msg.text}</div>
+                    </div>
+                  ))}
                 </div>
                 <div className="chat-input-row">
-                  <input type="text" placeholder="Type a message…" />
-                  <button>Send</button>
+                  <input 
+                    type="text" 
+                    placeholder="Type a message..."
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                  />
+                  <button onClick={handleSendMessage}>Send</button>
                 </div>
               </div>
             </div>
@@ -361,6 +431,30 @@ export default function Game() {
           </aside>
         </div>
       </div>
+      
+      {isGameOver && myPlayer && (
+        <div className="victory-overlay" id="victory-overlay" style={{ display: 'flex' }}>
+          <div className="victory-card">
+            <div className="vc-trophy">🏆</div>
+            <h2>Game Over!</h2>
+            <div className={`vc-winner color-${myPlayer.color}`}>
+              You placed {myPlayer.rank}{myPlayer.rank === 1 ? 'st' : myPlayer.rank === 2 ? 'nd' : myPlayer.rank === 3 ? 'rd' : 'th'}!
+            </div>
+            <div className="vc-stats">
+              {[...gameState.players]
+                .sort((a, b) => (a.rank || 99) - (b.rank || 99))
+                .map(p => (
+                <div key={p.userId} style={{ margin: '5px 0' }}>
+                  <strong>{p.rank}. {p.username}</strong> - {p.color}
+                </div>
+              ))}
+            </div>
+            <div className="vc-actions">
+              <button className="btn btn-muted" onClick={() => navigate("/home")}>Main Menu</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
