@@ -30,6 +30,7 @@ interface GameState {
   canRoll: boolean;
   rollHistory: number[];
   logs: string[];
+  turnExpiresAt?: number;
 }
 
 export default function Game() {
@@ -40,12 +41,13 @@ export default function Game() {
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<{sender: string, text: string, time: string, color: string}[]>([]);
   const [isGameOver, setIsGameOver] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(20);
 
   useEffect(() => {
     if (!game_id) return;
 
     socket.connect();
-    socket.emit("game:join_room", game_id);
+    socket.emit("game:join_room", { gameId: game_id, userId: user?._id });
 
     socket.on("game:update", (state: GameState) => {
       setGameState(state);
@@ -63,7 +65,21 @@ export default function Game() {
       socket.off("game:chat");
       socket.off("game:over");
     };
-  }, [game_id]);
+  }, [game_id, user?._id]);
+
+  useEffect(() => {
+    if (!gameState?.turnExpiresAt) return;
+
+    const updateTimer = () => {
+      const remaining = Math.max(0, Math.floor((gameState.turnExpiresAt! - Date.now()) / 1000));
+      setTimeLeft(remaining);
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameState?.turnExpiresAt]);
 
   if (!gameState) {
     return <div className="page" style={{ color: 'white', padding: '20px' }}>Loading game state...</div>;
@@ -72,16 +88,19 @@ export default function Game() {
   const currentPlayer = gameState.players[gameState.turnIndex];
   const isMyTurn = currentPlayer.userId === user?._id;
   const myPlayer = gameState.players.find(p => p.userId === user?._id);
+  
   const handleRollDice = () => {
     if (isMyTurn && gameState.canRoll) {
       socket.emit("game:roll", { gameId: game_id, userId: user?._id });
     }
   };
+  
   const handleTokenClick = (tokenId: string) => {
     if (isMyTurn && !gameState.canRoll && gameState.currentRoll !== null) {
       socket.emit("game:move", { gameId: game_id, userId: user?._id, tokenId });
     }
   };
+  
   const handleSendMessage = () => {
     if (!chatInput.trim() || !myPlayer) return;
     socket.emit("game:chat", { 
@@ -177,6 +196,7 @@ export default function Game() {
       </div>
     );
   };
+  
   const handleLeaveGame = () => {
     navigate("/home");
   };
@@ -189,7 +209,9 @@ export default function Game() {
             <div><span>Room: </span><strong>#{game_id}</strong></div>
             <div><span>Mode: </span><strong>Classic ({gameState.players.length} players)</strong></div>
           </div>
-          <div className="timer">20:00</div>
+          <div className="timer" style={{ color: timeLeft <= 5 ? 'red' : 'inherit', fontWeight: timeLeft <= 5 ? 'bold' : 'normal' }}>
+            00:{timeLeft.toString().padStart(2, '0')}
+          </div>
           <div className="flex-row gap-8px">
             <button className="btn btn-muted">▶ Spectate</button>
             <button className="btn btn-danger" onClick={handleLeaveGame}>✕ Leave Game</button>
@@ -232,7 +254,7 @@ export default function Game() {
                       {isActive && <span className="active-badge">Turn</span>}
                       <div className="p-name">
                         <div className={`p-dot dot-${p.color}`} />
-                        {p.username} ({p.color}) {isMe ? "(You)" : ""}
+                        {p.username} ({p.color}) {isMe ? "(You)" : ""} {p.isAI ? "🤖 (AI)" : ""}
                       </div>
                       <div className="p-stats">On board: {onBoard} &nbsp;|&nbsp; Home: {home} &nbsp;|&nbsp; Fin: {fin}</div>
                       <div className="prog-wrap">
