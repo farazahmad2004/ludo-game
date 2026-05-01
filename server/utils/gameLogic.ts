@@ -217,3 +217,22 @@ export function executeMove(gameState: GameState, userId: string, tokenId: strin
   }
   return gameState;
 }
+export function autoPlayTurn(gameState: any) {
+    const player = gameState.players[gameState.turnIndex];
+    if (gameState.canRoll) {
+        handleRoll(gameState, player.userId);
+    }
+    else if (gameState.currentRoll !== null) {
+        const movableTokens = player.tokens.filter((t: any) => 
+            t.state !== 'finished' && !(t.state === 'home' && gameState.currentRoll !== 6)
+        );
+
+        if (movableTokens.length > 0) {
+            const randomToken = movableTokens[Math.floor(Math.random() * movableTokens.length)];
+            executeMove(gameState, player.userId, randomToken.id);
+        } else {
+            advanceTurn(gameState);
+        }
+    }
+    return gameState;
+}

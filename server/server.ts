@@ -8,7 +8,7 @@ import { Socket, Server } from "socket.io";
 import http from "http";
 import { app } from "./app.ts";
 import mongoose from "mongoose";
-import { type GameState, initializeGame, handleRoll, executeMove } from "./utils/gameLogic.ts";
+import { type GameState, initializeGame, handleRoll, executeMove, autoPlayTurn } from "./utils/gameLogic.ts";
 const PORT = process.env.PORT || 8000;
 const MONGO_URI = process.env.MONGO_URI as string;
 const server = http.createServer(app);
@@ -19,6 +19,8 @@ const io = new Server(server, {
     credentials: true,
   },
 });
+const turnTimers = new Map<string, NodeJS.Timeout>();
+const userSockets = new Map<string, { userId: string, gameId: string }>();
 
 mongoose.connect(MONGO_URI).then(() => {
   console.log("MongoDB connected!");
@@ -40,6 +42,33 @@ const availableColors = ['red', 'blue', 'green', 'yellow'];
 const activeGames = new Map<string, GameState>();
 io.on("connection", (socket) => {
   console.log("USER CONNECTED:", socket.id);
+  const startTurnTimer = (gameId: string) => {
+        const gameState = activeGames.get(gameId);
+        if (!gameState || gameState.status === 'finished') return;
+        const currentPlayer = gameState.players[gameState.turnIndex];
+        const delay = currentPlayer.isAI ? 1500 : 20000;
+        gameState.turnExpiresAt = Date.now() + delay;
+        io.to(gameId).emit("game:update", gameState);
+
+        if (turnTimers.has(gameId)) clearTimeout(turnTimers.get(gameId));
+
+        const timer = setTimeout(async () => {
+            const state = activeGames.get(gameId);
+            if (!state) return;
+            autoPlayTurn(state);
+            if (state.status === 'finished') {
+                // *** INSERT YOUR EXISTING MongoDB SAVE LOGIC HERE ***
+                io.to(gameId).emit("game:over", state);
+                activeGames.delete(gameId);
+                turnTimers.delete(gameId);
+            } else {
+                activeGames.set(gameId, state);
+                startTurnTimer(gameId); 
+            }
+        }, delay);
+
+        turnTimers.set(gameId, timer);
+    };
   socket.on("room:join", (userData) => {
     const existingPlayerIndex = waitingLobby.findIndex(p => p.userId === userData._id);
     if (existingPlayerIndex !== -1) {
@@ -78,14 +107,25 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("game:join_room", (gameId: string) => {
-    socket.join(gameId);
-    
-    const gameState = activeGames.get(gameId);
-    if (gameState) {
-      io.to(gameId).emit("game:update", gameState);
-    }
-  });
+  socket.on("game:join_room", ({ gameId, userId }) => {
+      socket.join(gameId);
+      userSockets.set(socket.id, { userId, gameId });
+      const gameState = activeGames.get(gameId);
+      if (gameState) {
+          const player = gameState.players.find(p => p.userId === userId);
+          if (player && player.isAI) {
+              player.isAI = false;
+              gameState.logs.unshift(`${player.username} reconnected!`);
+              if (gameState.players[gameState.turnIndex].userId === userId) {
+                  startTurnTimer(gameId);
+              } else {
+                  io.to(gameId).emit("game:update", gameState);
+              }
+          } else if (gameState.status === 'playing' && !turnTimers.has(gameId)) {
+              startTurnTimer(gameId);
+          }
+      }
+    });
   socket.on("game:roll", ({ gameId, userId }) => {
     const gameState = activeGames.get(gameId);
     if (!gameState) return;
@@ -93,6 +133,7 @@ io.on("connection", (socket) => {
     if (updatedState) {
       activeGames.set(gameId, updatedState);
       io.to(gameId).emit("game:update", updatedState);
+      startTurnTimer(gameId);
     }
   });
   socket.on("game:move", async ({ gameId, userId, tokenId }) => {
@@ -102,6 +143,7 @@ io.on("connection", (socket) => {
     if (updatedState) {
       activeGames.set(gameId, updatedState);
       io.to(gameId).emit("game:update", updatedState);
+      startTurnTimer(gameId);
       if (updatedState.status === 'finished') {
         try {
           // coins ki calc.
@@ -148,10 +190,25 @@ io.on("connection", (socket) => {
     io.to(gameId).emit("game:chat", { sender, text, time, color });
   });
   socket.on("disconnect", () => {
-    console.log("USER DISCONNECTED:", socket.id);
-    waitingLobby = waitingLobby.filter(p => p.socketId !== socket.id);
-    io.emit("lobby:update", waitingLobby);
-  });
+      const session = userSockets.get(socket.id);
+      if (session) {
+          const { userId, gameId } = session;
+          const gameState = activeGames.get(gameId);
+          if (gameState && gameState.status !== 'finished') {
+              const player = gameState.players.find(p => p.userId === userId);
+              if (player) {
+                  player.isAI = true;
+                  gameState.logs.unshift(`${player.username} disconnected. AI taking over.`);
+                  if (gameState.players[gameState.turnIndex].userId === userId) {
+                      startTurnTimer(gameId);
+                  } else {
+                      io.to(gameId).emit("game:update", gameState);
+                  }
+              }
+          }
+          userSockets.delete(socket.id);
+      }
+    });
 });
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
