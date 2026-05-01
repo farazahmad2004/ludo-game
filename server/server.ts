@@ -6,7 +6,7 @@ import { Socket, Server } from "socket.io";
 import http from "http";
 import { app } from "./app.ts";
 import mongoose from "mongoose";
-import { GameState, initializeGame, handleRoll, executeMove } from "./utils/gameLogic.ts";
+import { type GameState, initializeGame, handleRoll, executeMove } from "./utils/gameLogic.ts";
 const PORT = process.env.PORT || 8000;
 const MONGO_URI = process.env.MONGO_URI as string;
 const server = http.createServer(app);
