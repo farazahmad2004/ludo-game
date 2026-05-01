@@ -71,7 +71,16 @@ export function initializeGame(gameId: string, lobbyPlayers: any[]): GameState {
 export function hasValidMoves(player: PlayerState, roll: number): boolean {
   return player.tokens.some(t => calculateTargetPosition(t, roll) !== null);
 }
-
+export function advanceTurn(gameState: GameState) {
+  let nextIndex = (gameState.turnIndex + 1) % gameState.players.length;
+  while (gameState.players[nextIndex].hasFinished && nextIndex !== gameState.turnIndex) {
+    nextIndex = (nextIndex + 1) % gameState.players.length;
+  }
+  
+  gameState.turnIndex = nextIndex;
+  gameState.currentRoll = null;
+  gameState.canRoll = true;
+}
 export function handleRoll(gameState: GameState, userId: string): GameState | null {
   const currentPlayer = gameState.players[gameState.turnIndex];
   if (currentPlayer.userId !== userId || !gameState.canRoll) {
@@ -90,11 +99,8 @@ export function handleRoll(gameState: GameState, userId: string): GameState | nu
 
   if (!hasValidMoves(currentPlayer, roll)) {
     gameState.logs.unshift(`${currentPlayer.username} has no valid moves.`);
-    gameState.turnIndex = (gameState.turnIndex + 1) % gameState.players.length;
-    gameState.currentRoll = null;
-    gameState.canRoll = true;
+    advanceTurn(gameState);
   }
-
   return gameState;
 }
 // actual logic of the game is here
@@ -157,6 +163,14 @@ export function executeMove(gameState: GameState, userId: string, tokenId: strin
     token.state = 'finished';
     token.position = targetPos;
     gameState.logs.unshift(`${player.username}'s token reached the finish!`);
+    
+    // Check if player has won
+    if (player.tokens.every(t => t.state === 'finished')) {
+      player.hasFinished = true;
+      const currentRank = gameState.players.filter(p => p.hasFinished).length;
+      player.rank = currentRank;
+      gameState.logs.unshift(`${player.username} finished in ${currentRank}${currentRank === 1 ? 'st' : currentRank === 2 ? 'nd' : currentRank === 3 ? 'rd' : 'th'} place!`);
+    }
   } 
   else {
     token.state = 'board';
@@ -181,12 +195,25 @@ export function executeMove(gameState: GameState, userId: string, tokenId: strin
     gameState.logs.unshift(`${player.username} captured ${capturedCount} token(s)!`);
   }
 
+  // Check if game is completely over (only 1 player hasn't finished)
+  const activePlayers = gameState.players.filter(p => !p.hasFinished);
+  if (activePlayers.length <= 1) {
+    if (activePlayers.length === 1) {
+      const lastPlayer = activePlayers[0];
+      lastPlayer.hasFinished = true;
+      lastPlayer.rank = gameState.players.length;
+    }
+    gameState.status = 'finished';
+    return gameState;
+  }
+
   const hasExtraTurn = gameState.currentRoll === 6;
   
-  if (!hasExtraTurn) {
-    gameState.turnIndex = (gameState.turnIndex + 1) % gameState.players.length;
+  if (!hasExtraTurn || player.hasFinished) {
+    advanceTurn(gameState);
+  } else {
+    gameState.currentRoll = null;
+    gameState.canRoll = true;
   }
-  gameState.currentRoll = null;
-  gameState.canRoll = true;
   return gameState;
 }
